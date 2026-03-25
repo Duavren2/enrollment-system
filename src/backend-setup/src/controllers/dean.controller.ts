@@ -1,0 +1,428 @@
+import { Response } from 'express';
+import { query, run } from '../database/connection';
+import { AuthRequest } from '../middleware/auth.middleware';
+
+// Programs Management
+export const getAllPrograms = async (req: AuthRequest, res: Response) => {
+  try {
+    const { status, department } = req.query;
+
+    let sql = 'SELECT * FROM programs WHERE 1=1';
+    const params: any[] = [];
+
+    if (status) {
+      sql += ' AND status = ?';
+      params.push(status);
+    }
+    if (department) {
+      sql += ' AND department = ?';
+      params.push(department);
+    }
+
+    sql += ' ORDER BY program_code';
+
+    const programs = await query(sql, params);
+
+    res.json({
+      success: true,
+      data: programs
+    });
+  } catch (error) {
+    console.error('Get all programs error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+export const getProgramById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const programs = await query('SELECT * FROM programs WHERE id = ?', [id]);
+
+    if (programs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Program not found'
+      });
+    }
+
+    // Get curriculum for this program
+    const curriculum = await query(
+      `SELECT 
+        c.*,
+        s.subject_code,
+        s.subject_name,
+        s.units
+       FROM curriculum c
+       JOIN subjects s ON c.subject_id = s.id
+       WHERE c.program_id = ?
+       ORDER BY c.year_level, c.semester, s.subject_code`,
+      [id]
+    );
+
+    // Get student count
+    const studentCount = await query(
+      'SELECT COUNT(*) as count FROM students WHERE course = ? AND status = ?',
+      [programs[0].program_code, 'Active']
+    );
+
+    res.json({
+      success: true,
+      data: {
+        program: programs[0],
+        curriculum,
+        studentCount: studentCount[0]?.count || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get program by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+export const createProgram = async (req: AuthRequest, res: Response) => {
+  try {
+    const {
+      program_code,
+      program_name,
+      description,
+      department,
+      degree_type,
+      duration_years,
+      total_units
+    } = req.body;
+
+    const result = await run(
+      `INSERT INTO programs 
+        (program_code, program_name, description, department, degree_type, duration_years, total_units)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [program_code, program_name, description || null, department || null, degree_type || null, duration_years || null, total_units || null]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Program created successfully',
+      data: { id: result.lastInsertRowid }
+    });
+  } catch (error: any) {
+    console.error('Create program error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message?.includes('UNIQUE') ? 'Program code already exists' : 'Server error'
+    });
+  }
+};
+
+export const updateProgram = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const {
+      program_code,
+      program_name,
+      description,
+      department,
+      degree_type,
+      duration_years,
+      total_units,
+      status
+    } = req.body;
+
+    await run(
+      `UPDATE programs SET 
+        program_code = ?, program_name = ?, description = ?, department = ?,
+        degree_type = ?, duration_years = ?, total_units = ?, status = ?,
+        updated_at = datetime('now')
+      WHERE id = ?`,
+      [program_code, program_name, description, department, degree_type, duration_years, total_units, status, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Program updated successfully'
+    });
+  } catch (error) {
+    console.error('Update program error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+export const deleteProgram = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    await run('DELETE FROM programs WHERE id = ?', [id]);
+
+    res.json({
+      success: true,
+      message: 'Program deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete program error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Curriculum Management
+export const getCurriculumByProgram = async (req: AuthRequest, res: Response) => {
+  try {
+    const { programId } = req.params;
+
+    // Get program info
+    const programRows = await query('SELECT * FROM programs WHERE id = ?', [programId]);
+    const program = programRows.length > 0 ? programRows[0] : null;
+
+    const curriculum = await query(
+      `SELECT 
+        c.*,
+        s.subject_code,
+        s.subject_name,
+        s.units,
+        s.description as subject_description,
+        ps.subject_code as prerequisite_code,
+        ps.subject_name as prerequisite_name
+       FROM curriculum c
+       JOIN subjects s ON c.subject_id = s.id
+       LEFT JOIN subjects ps ON c.prerequisite_subject_id = ps.id
+       WHERE c.program_id = ?
+       ORDER BY c.year_level, 
+         CASE c.semester WHEN '1st' THEN 1 WHEN '2nd' THEN 2 WHEN '3rd' THEN 3 END,
+         s.subject_code`,
+      [programId]
+    );
+
+    // Compute LEC/LAB split (convention: 3-unit = 3 LEC 0 LAB, 4-unit = 3 LEC 1 LAB)
+    const withLecLab = curriculum.map((c: any) => ({
+      ...c,
+      lec: c.units >= 4 ? 3 : c.units,
+      lab: c.units >= 4 ? c.units - 3 : 0
+    }));
+
+    // Compute total units dynamically
+    const totalUnits = withLecLab.reduce((sum: number, s: any) => sum + (s.units || 0), 0);
+
+    res.json({
+      success: true,
+      data: withLecLab,
+      program: program ? {
+        program_code: program.program_code,
+        program_name: program.program_name,
+        total_units: totalUnits
+      } : null
+    });
+  } catch (error) {
+    console.error('Get curriculum by program error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+export const addSubjectToCurriculum = async (req: AuthRequest, res: Response) => {
+  try {
+    const { program_id, subject_id, year_level, semester, is_core, prerequisite_subject_id } = req.body;
+
+    const result = await run(
+      `INSERT INTO curriculum 
+        (program_id, subject_id, year_level, semester, is_core, prerequisite_subject_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [program_id, subject_id, year_level, semester, is_core ? 1 : 0, prerequisite_subject_id || null]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Subject added to curriculum successfully',
+      data: { id: result.lastInsertRowid }
+    });
+  } catch (error: any) {
+    console.error('Add subject to curriculum error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message?.includes('UNIQUE') ? 'Subject already in curriculum' : 'Server error'
+    });
+  }
+};
+
+export const addSubjectsToCurriculumBatch = async (req: AuthRequest, res: Response) => {
+  try {
+    const { program_id, subjects } = req.body;
+    // subjects is an array of { subject_id, year_level, semester, is_core, prerequisite_subject_id }
+    if (!program_id || !Array.isArray(subjects) || subjects.length === 0) {
+      return res.status(400).json({ success: false, message: 'program_id and subjects array are required' });
+    }
+
+    let added = 0;
+    let skipped = 0;
+    for (const s of subjects) {
+      try {
+        await run(
+          `INSERT INTO curriculum (program_id, subject_id, year_level, semester, is_core, prerequisite_subject_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [program_id, s.subject_id, s.year_level, s.semester, s.is_core ? 1 : 0, s.prerequisite_subject_id || null]
+        );
+        added++;
+      } catch (e: any) {
+        if (e.message?.includes('UNIQUE')) {
+          skipped++;
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `${added} subject(s) added to curriculum${skipped > 0 ? `, ${skipped} already existed` : ''}`,
+      data: { added, skipped }
+    });
+  } catch (error) {
+    console.error('Batch add subjects to curriculum error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+export const removeSubjectFromCurriculum = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    await run('DELETE FROM curriculum WHERE id = ?', [id]);
+
+    res.json({
+      success: true,
+      message: 'Subject removed from curriculum successfully'
+    });
+  } catch (error) {
+    console.error('Remove subject from curriculum error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Get dean dashboard stats
+export const getDeanDashboardStats = async (req: AuthRequest, res: Response) => {
+  try {
+    // Total faculty
+    const totalFaculty = await query("SELECT COUNT(*) as count FROM faculty WHERE status = 'Active'");
+
+    // Active programs
+    const activePrograms = await query("SELECT COUNT(*) as count FROM programs WHERE status = 'Active'");
+
+    // Total students
+    const totalStudents = await query("SELECT COUNT(*) as count FROM students WHERE status = 'Active'");
+
+    // Pending approvals (could be curriculum proposals, etc.)
+    const pendingApprovals = await query(
+      "SELECT COUNT(*) as count FROM enrollments WHERE status = 'For Approval'"
+    );
+
+    res.json({
+      success: true,
+      data: {
+        totalFaculty: totalFaculty[0]?.count || 0,
+        activePrograms: activePrograms[0]?.count || 0,
+        totalStudents: totalStudents[0]?.count || 0,
+        pendingApprovals: pendingApprovals[0]?.count || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get dean dashboard stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Assign teacher to section
+export const assignTeacherToSection = async (req: AuthRequest, res: Response) => {
+  try {
+    const { teacherId, sectionId } = req.body;
+
+    if (!teacherId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Teacher ID is required'
+      });
+    }
+
+    // Check that the faculty member exists
+    const faculty = await query('SELECT * FROM faculty WHERE id = ?', [teacherId]);
+    if (faculty.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Faculty member not found'
+      });
+    }
+
+    // Ensure sections exist (create Section 1 and Section 2 if missing)
+    const existingSections = await query('SELECT COUNT(*) as count FROM sections');
+    if (existingSections[0]?.count === 0) {
+      await run(
+        `INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+         VALUES ('1', 'Section 1', 'BSCS', 1, '2024-2025', '1st', 'Active')`,
+        []
+      );
+      await run(
+        `INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+         VALUES ('2', 'Section 2', 'BSCS', 1, '2024-2025', '1st', 'Active')`,
+        []
+      );
+    }
+
+    // If 'none', remove this teacher from any section they are adviser of
+    if (!sectionId || sectionId === 'none') {
+      await run(
+        'UPDATE sections SET adviser_id = NULL, updated_at = datetime(\'now\') WHERE adviser_id = ?',
+        [teacherId]
+      );
+      return res.json({
+        success: true,
+        message: 'Teacher unassigned from section'
+      });
+    }
+
+    // First, remove this teacher from any other section
+    await run(
+      'UPDATE sections SET adviser_id = NULL, updated_at = datetime(\'now\') WHERE adviser_id = ?',
+      [teacherId]
+    );
+
+    // Then assign to the new section
+    const result = await run(
+      'UPDATE sections SET adviser_id = ?, updated_at = datetime(\'now\') WHERE section_code = ?',
+      [teacherId, sectionId]
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Section not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Teacher assigned to Section ${sectionId} successfully`
+    });
+  } catch (error) {
+    console.error('Assign teacher to section error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
