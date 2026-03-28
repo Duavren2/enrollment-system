@@ -4,12 +4,13 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
+import { Checkbox } from './ui/checkbox';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from './ui/select';
 import {
   GraduationCap, ArrowLeft, ArrowRight, Upload, Loader2, CheckCircle,
-  FileText, ClipboardList, CreditCard, Search, AlertCircle, Copy, Check
+  FileText, ClipboardList, CreditCard, Search, AlertCircle, Copy, Check, ShieldCheck
 } from 'lucide-react';
 import { preRegistrationService } from '../services/preregistration.service';
 
@@ -65,6 +66,8 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
 
   // Phase 2: Payment
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [privacyConsent, setPrivacyConsent] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(true);
 
   useEffect(() => {
     const loadCourses = async () => {
@@ -163,6 +166,8 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
       Object.entries(assessment).forEach(([k, v]) => fd.append(k, String(v)));
       // Receipt
       if (receiptFile) fd.append('receipt', receiptFile);
+      // Privacy consent
+      fd.append('privacy_consent', String(privacyConsent));
 
       const resp = await preRegistrationService.submitPreRegistration(fd);
       if (resp.success) {
@@ -203,8 +208,59 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
           </div>
         </div>
 
+        {/* ─── Data Privacy Notice Gate ─── */}
+        {showPrivacy && (
+          <Card className="p-8 shadow-lg border-0">
+            <div className="flex flex-col items-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mb-4">
+                <ShieldCheck className="h-8 w-8 text-blue-600" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900">Data Privacy Notice</h2>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 mb-6">
+              <div className="text-sm text-slate-700 leading-relaxed space-y-4">
+                <p>
+                  Informatics believes in the sanctity of personal information and the rights of individuals to Data Privacy per <strong>Republic Act 10173 – Data Privacy Act of 2012</strong>. Thus, Informatics is committed to the protection and responsible usage of such information. Informatics will only collect, use, and disclose your personal information with your knowledge and consent.
+                </p>
+                <p>
+                  You may access the complete Data Privacy Act of 2012 at{' '}
+                  <a href="https://privacy.gov.ph/data-privacy-act/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium">
+                    https://privacy.gov.ph/data-privacy-act/
+                  </a>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 p-4 bg-white border border-slate-200 rounded-xl mb-6">
+              <Checkbox
+                id="privacy-consent"
+                checked={privacyConsent}
+                onCheckedChange={(checked: any) => setPrivacyConsent(checked === true)}
+                className="mt-0.5"
+              />
+              <label htmlFor="privacy-consent" className="text-sm text-slate-700 cursor-pointer flex-1 leading-relaxed">
+                I consent to receive marketing communications, updates, and newsletters from Informatics Philippines. I understand my data will be handled in accordance with the Privacy Policy.
+              </label>
+            </div>
+
+            <div className="flex justify-between">
+              <Button variant="outline" onClick={onBack} className="gap-1">
+                <ArrowLeft className="h-4 w-4" /> Back to Login
+              </Button>
+              <Button
+                onClick={() => setShowPrivacy(false)}
+                disabled={!privacyConsent}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 gap-1"
+              >
+                Proceed <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </Card>
+        )}
+
         {/* Step Indicator */}
-        {currentStep !== 'complete' && (
+        {!showPrivacy && currentStep !== 'complete' && (
           <div className="flex items-center justify-between mb-8 bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
             {STEPS.filter(s => s.key !== 'complete').map((step, i) => {
               const Icon = step.icon;
@@ -227,14 +283,14 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
           </div>
         )}
 
-        {error && (
+        {!showPrivacy && error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-700">
             <AlertCircle className="h-5 w-5 flex-shrink-0" /> <p className="text-sm">{error}</p>
           </div>
         )}
 
         {/* ─── STEP 1: Personal Information ─── */}
-        {currentStep === 'info' && (
+        {!showPrivacy && currentStep === 'info' && (
           <Card className="p-8 shadow-lg border-0">
             <h2 className="text-xl font-bold mb-1">Personal Information</h2>
             <p className="text-sm text-slate-500 mb-6">Please provide your contact details and basic information.</p>
@@ -321,7 +377,7 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
         )}
 
         {/* ─── STEP 2: Learning Options ─── */}
-        {currentStep === 'options' && (
+        {!showPrivacy && currentStep === 'options' && (
           <Card className="p-8 shadow-lg border-0">
             <h2 className="text-xl font-bold mb-1">Learning Options</h2>
             <p className="text-sm text-slate-500 mb-6">Select your preferred modality, course, and payment terms.</p>
@@ -394,7 +450,7 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
         )}
 
         {/* ─── STEP 3: Assessment / Matriculation ─── */}
-        {currentStep === 'assessment' && (
+        {!showPrivacy && currentStep === 'assessment' && (
           <Card className="p-8 shadow-lg border-0">
             <h2 className="text-xl font-bold mb-1">Assessment & Matriculation</h2>
             <p className="text-sm text-slate-500 mb-6">Review your estimated fees below.</p>
@@ -451,7 +507,7 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
         )}
 
         {/* ─── STEP 4: Payment Upload ─── */}
-        {currentStep === 'payment' && (
+        {!showPrivacy && currentStep === 'payment' && (
           <Card className="p-8 shadow-lg border-0">
             <h2 className="text-xl font-bold mb-1">Payment Submission</h2>
             <p className="text-sm text-slate-500 mb-6">Upload your payment receipt to complete your application.</p>
@@ -498,7 +554,7 @@ export default function PreRegistrationPage({ onBack }: PreRegistrationPageProps
         )}
 
         {/* ─── STEP 5: Complete ─── */}
-        {currentStep === 'complete' && (
+        {!showPrivacy && currentStep === 'complete' && (
           <Card className="p-8 shadow-lg border-0 text-center">
             <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-green-100 flex items-center justify-center">
               <CheckCircle className="h-10 w-10 text-green-600" />
